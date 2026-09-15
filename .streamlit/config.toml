@@ -1,0 +1,10 @@
+# Mørkt tema for hele appen (tilføjet 2026-09-11, se projektloggens
+# "Kort-redesign" - kortet er designet til mørk baggrund, jf. brugerens
+# eksplicitte valg af mørkt tema for HELE appen, ikke kun kortet, for at
+# undgå et mørkt kort der "flyder" oven på en lys standardside).
+[theme]
+base = "dark"
+primaryColor = "#3b82f6"
+backgroundColor = "#0d0f16"
+secondaryBackgroundColor = "#151720"
+textColor = "#e2e4ed"

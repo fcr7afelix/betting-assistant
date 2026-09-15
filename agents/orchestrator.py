@@ -6,6 +6,7 @@ Denne fil indeholder KUN den ene reelle prompt i systemet: dialogen med brugeren
 """
 
 import os
+import re
 import json
 import datetime
 from pathlib import Path
@@ -19,10 +20,12 @@ client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)
 
-SYSTEM_PROMPT = """Du er en dialogassistent for en betting-rådgivningsplatform.
+SYSTEM_PROMPT = """Du er en dialogassistent for en betting-rådgivningsplatform, der
+udelukkende giver forslag til fodboldkampe fra Big 5-ligaerne (Premier League,
+Serie A, La Liga, Bundesliga, Ligue 1).
 
 Din opgave er UDELUKKENDE at afklare tre ting med brugeren gennem naturlig samtale:
-1. Sportsgren
+1. Liga
 2. Marked (Asian Handicap eller Over/Under 2.5)
 3. Indsats (beløb i kr.)
 
@@ -31,7 +34,15 @@ systemer efter dig. Når alle tre er afklaret, opsummér dem og bed EKSPLICIT om
 bekræftelse fra brugeren, FØR du kalder funktionen "afklaring_fuldfoert".
 
 Forklar kort, hvorfor du spørger til det, du spørger om. Undgå at presse brugeren
-mod bestemte valg - dit formål er at afklare præferencer, ikke overtale."""
+mod bestemte valg - dit formål er at afklare præferencer, ikke overtale.
+
+Hvis brugeren IKKE bekræfter opsummeringen (fx retter et felt, siger nej, eller er i
+tvivl), må du IKKE kalde funktionen "afklaring_fuldfoert". Spørg i stedet konkret,
+hvilket felt der skal rettes, opdatér kun det felt, opsummér alle tre felter igen
+(inkl. de uændrede), og bed om bekræftelse på ny, før du kalder funktionen.
+
+Når du spørger til indsatsen, hold spørgsmålet kort og ligetil - giv IKKE en
+parentetisk liste af eksempelbeløb (undgå fx "(50 kr, 100 kr, 500 kr osv.)")."""
 
 AFKLARING_TOOL = {
     "name": "afklaring_fuldfoert",
@@ -39,13 +50,94 @@ AFKLARING_TOOL = {
     "input_schema": {
         "type": "object",
         "properties": {
-            "sport": {"type": "string", "description": "Den valgte sportsgren, fx fodbold"},
+            "liga": {
+                "type": "string",
+                "enum": ["Premier League", "Serie A", "La Liga", "Bundesliga", "Ligue 1"],
+            },
             "marked": {"type": "string", "enum": ["Asian Handicap", "Over/Under 2.5"]},
             "indsats": {"type": "number", "description": "Indsats i kroner"},
         },
-        "required": ["sport", "marked", "indsats"],
+        "required": ["liga", "marked", "indsats"],
     },
 }
+
+# Deterministisk ikon-indsættelse - IKKE overladt til sprogmodellens generering,
+# samme princip som ansvarligt-spil-disclaimeren. Lukket, enum-begrænset sæt
+# (5 ligaer, 2 markeder) gør 1:1-mapping mulig.
+LIGA_IKONER = {
+    "Premier League": "🇬🇧",
+    "Serie A": "🇮🇹",
+    "La Liga": "🇪🇸",
+    "Bundesliga": "🇩🇪",
+    "Ligue 1": "🇫🇷",
+}
+MARKED_IKONER = {
+    "Asian Handicap": "⚖️",
+    "Over/Under 2.5": "↕️",
+}
+
+
+# Bred emoji-detektion - bruges til at fjerne ALLE emoji, Haiku selv måtte
+# generere, så kun vores kontrollerede, deterministiske ikonsæt vises.
+_EMOJI_MOENSTER = re.compile(
+    "["
+    "\U0001F600-\U0001F64F"  # emoticons
+    "\U0001F300-\U0001F5FF"  # symboler & piktogrammer
+    "\U0001F680-\U0001F6FF"  # transport
+    "\U0001F1E0-\U0001F1FF"  # flag (regionale indikatorer)
+    "\U00002700-\U000027BF"  # dingbats
+    "\U0001F900-\U0001F9FF"  # supplerende symboler
+    "\U00002600-\U000026FF"  # diverse symboler (bl.a. ⚖)
+    "\U0001FA70-\U0001FAFF"
+    "\U00002190-\U000021FF"  # pile (bl.a. ↕)
+    "\U0000FE00-\U0000FE0F"  # variationsselektorer
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def tilfoej_ikoner(tekst):
+    """Indsætter deterministisk et fast ikon efter kendte liga-/marked-navne og
+    kronebeløb i en tekststreng. Køres på al tekst, FØR den vises til brugeren
+    eller gemmes i transskriptet - aldrig på det, der sendes tilbage til
+    sprogmodellen som samtalehistorik.
+
+    Fremgangsmåde: (1) fjern FØRST alle emoji, Haiku selv måtte have genereret
+    (uanset om det er vores egne eller andre, fx 📊 👍) - kun vores kodestyrede
+    mapping skal bestemme, hvilke ikoner der vises, (2) indsæt derefter vores
+    ikoner deterministisk efter hvert navn/beløb."""
+    tekst = _EMOJI_MOENSTER.sub("", tekst)
+    tekst = re.sub(r"[ \t]{2,}", " ", tekst)
+    tekst = re.sub(r"[ \t]+\n", "\n", tekst)
+    tekst = re.sub(r"[ \t]+$", "", tekst, flags=re.MULTILINE)
+
+    for navn, ikon in {**LIGA_IKONER, **MARKED_IKONER}.items():
+        tekst = re.sub(
+            rf'({re.escape(navn)})(\*{{0,2}})',
+            rf'\1\2 {ikon}',
+            tekst,
+        )
+    tekst = re.sub(r'(\d+([.,]\d+)?\s*kr\.?)', rf'\1 💰', tekst)
+    return tekst
+
+
+# Deterministisk validering/ansvarligt-spil-grænse for indsatsen - kodestyret,
+# IKKE overladt til Haikus egen vurdering (samme princip som ikon-funktionen
+# og ansvarligt-spil-disclaimeren på det endelige forslag).
+GRAENSE_HOEJ_INDSATS = 1000
+HOEJ_INDSATS_BESKED = (
+    "Dit anmodede indsatsbeløb er sat ret højt! Spil med omtanke. "
+    "Og spil aldrig for mere, end du har råd til at tabe!"
+)
+
+
+def valider_indsats(indsats):
+    """Returnerer en fejlbesked (str), hvis indsatsen er ugyldig, ellers None.
+    Kaldes FØR en afklaring accepteres som fuldført - Haiku kan ikke omgå
+    denne kontrol, uanset hvad tool-kaldet indeholder."""
+    if not isinstance(indsats, (int, float)) or indsats <= 0:
+        return "Indsatsen skal være et positivt beløb større end 0 kr. Spørg brugeren om et gyldigt beløb igen."
+    return None
 
 
 def save_transcript(session_id, messages, afklaring):
@@ -56,8 +148,16 @@ def save_transcript(session_id, messages, afklaring):
     for m in messages:
         content = m["content"]
         if isinstance(content, list):
+            # Indhold kan enten være rigtige SDK-blokke fra Haikus svar (har
+            # attributter som b.type) ELLER almindelige dicts, vi selv har
+            # bygget (fx en tool_result-fejlbesked ved afvist indsats) - de to
+            # skal serialiseres forskelligt.
             content = [
-                {"type": b.type, "text": getattr(b, "text", None), "input": getattr(b, "input", None)}
+                b if isinstance(b, dict) else {
+                    "type": b.type,
+                    "text": tilfoej_ikoner(b.text) if getattr(b, "text", None) else getattr(b, "text", None),
+                    "input": getattr(b, "input", None),
+                }
                 for b in content
             ]
         serializable_messages.append({"role": m["role"], "content": content})
@@ -77,11 +177,17 @@ def run_dialog(session_id="dev"):
     """Kører dialogen i terminalen (CLI-testmode). Returnerer den afklarede
     forespørgsel som dict, når brugeren har bekræftet alle tre felter."""
     messages = []
-    print("Assistent: Hej! Lad os finde et forslag til dig. Hvilken sportsgren interesserer dig?")
+    print("Assistent:", tilfoej_ikoner("Hej! Lad os finde et forslag til dig. Hvilken liga interesserer dig? (Premier League, Serie A, La Liga, Bundesliga eller Ligue 1)"))
+
+    afventer_tool_result = False  # True lige efter en afvist indsats - da skal
+    # modellen svare på fejlen FØR vi beder om ny brugerinput (API'et kræver
+    # skiftevis user/assistant - to user-beskeder i træk er ikke gyldigt).
 
     while True:
-        user_input = input("Dig: ")
-        messages.append({"role": "user", "content": user_input})
+        if not afventer_tool_result:
+            user_input = input("Dig: ")
+            messages.append({"role": "user", "content": user_input})
+        afventer_tool_result = False
 
         response = client.messages.create(
             model="claude-haiku-4-5",
@@ -94,12 +200,33 @@ def run_dialog(session_id="dev"):
 
         text_blocks = [b.text for b in response.content if b.type == "text"]
         if text_blocks:
-            print("Assistent:", " ".join(text_blocks))
+            print("Assistent:", tilfoej_ikoner(" ".join(text_blocks)))
 
         tool_use_block = next((b for b in response.content if b.type == "tool_use"), None)
         if tool_use_block:
             afklaring = tool_use_block.input
+            fejl = valider_indsats(afklaring.get("indsats"))
+            if fejl:
+                # Ugyldig indsats - afvis deterministisk, send tool_result med
+                # fejlbesked tilbage til modellen, og lad MODELLEN svare på
+                # den (ikke brugeren) i næste loop-iteration.
+                messages.append({
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_block.id,
+                            "content": fejl,
+                            "is_error": True,
+                        }
+                    ],
+                })
+                afventer_tool_result = True
+                continue
+
             print("\n[Afklaring fuldført]:", json.dumps(afklaring, ensure_ascii=False, indent=2))
+            if afklaring["indsats"] > GRAENSE_HOEJ_INDSATS:
+                print(f"[Info] {HOEJ_INDSATS_BESKED}")
             save_transcript(session_id, messages, afklaring)
             return afklaring
 

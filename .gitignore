@@ -4,3 +4,19 @@ __pycache__/
 *.pyc
 logs/
 .DS_Store
+cache/
+*.bak-*
+diagnose_*.py
+patch_*.py
+fix_key.py
+find_second_bookmaker.py
+list_competitions_fd.py
+list_leagues_sportsdb.py
+list_sports.py
+save_firecrawl_key.py
+save_football_data_key.py
+verify_liga_navne.py
+verify_pinnacle_kamp2.py
+verify_racing.py
+Claude outputs/
+.DS_Store
