@@ -48,6 +48,9 @@ pris.
 Regler:
 1. Brug UDELUKKENDE oplysninger, der faktisk staar i de leverede resultater.
    Opfind ALDRIG en faktor, der ikke er direkte understøttet af teksten.
+   Dette gaelder OGSAA konkrete tal (fx tabelplacering, pointtal, statistik):
+   gengiv et tal KUN hvis det staar ordret eller entydigt i kildeteksten -
+   gaet ALDRIG et tal, selv et der lyder plausibelt.
 2. Hvis INGEN af resultaterne er relevante for kampen, skal du returnere en
    TOM liste af fund og sætte kilder_vurderet_relevante til 0. Sig det ærligt
    - forsøg ALDRIG at konstruere relevans ud af irrelevant materiale for at
@@ -57,6 +60,17 @@ Regler:
    kampstart (fx en usikker opstilling, en skade under afklaring), saet det
    som usikkerhedspunkt. Findes intet saadant i materialet, saet det til null
    - opfind det ikke.
+5. Kildeteksten (fra Firecrawl) er OFTE stoejet, ufuldstaendig eller daarligt
+   formateret. Skriv ALLIGEVEL hvert fund som en fuldstaendig, grammatisk
+   korrekt daensk saetning - opfind ALDRIG et ord eller sammensat ord, der
+   ikke findes i det daenske sprog, for at "faa saetningen til at haenge
+   sammen" (fx paafundne ord som "ekstremist" om en spiller, eller
+   "hjemmepointerede" - saadanne ord findes ikke og maa ALDRIG bruges). Er
+   kildeteksten for utydelig eller stoejet til at kunne omskrives til en
+   klar, korrekt saetning, UDELAD den detalje helt fremfor at gaette dig
+   frem til noget uforstaaeligt.
+6. Skriv UDELUKKENDE paa naturligt, korrekt dansk. Undgaa aktivt norsk- eller
+   svensk-farvede ord og vendinger, selv naar de ligner dansk.
 
 Kald altid funktionen "aflever_analyse" med dit resultat."""
 

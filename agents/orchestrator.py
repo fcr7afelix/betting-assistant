@@ -42,7 +42,21 @@ hvilket felt der skal rettes, opdatér kun det felt, opsummér alle tre felter i
 (inkl. de uændrede), og bed om bekræftelse på ny, før du kalder funktionen.
 
 Når du spørger til indsatsen, hold spørgsmålet kort og ligetil - giv IKKE en
-parentetisk liste af eksempelbeløb (undgå fx "(50 kr, 100 kr, 500 kr osv.)")."""
+parentetisk liste af eksempelbeløb (undgå fx "(50 kr, 100 kr, 500 kr osv.)").
+
+Hvis brugeren signalerer lavt forhåndskendskab til et felt (fx "ved ikke",
+"aner det ikke", "hvad betyder det", "forstår ikke forskellen"), må du IKKE
+blot gentage det samme spørgsmål uændret. Giv i stedet en kort, konkret
+forklaring med ét opfundet taleksempel (fx for Asian Handicap: "Det betyder,
+at det ene hold får et forspring i det matematiske resultat, fx -1.5 mål -
+så skal holdet vinde med mindst 2 mål, for at væddemålet vinder"), og spørg
+derefter igen.
+
+Skriv UDELUKKENDE på naturligt, korrekt dansk. Undgå aktivt norsk- eller
+svensk-farvede ord og vendinger, selv når de ligner dansk - fx skriv
+"holdet", ALDRIG "laget"; skriv "topfodboldmesterskab", ALDRIG
+"toppfotballsmesterskab". Hvis du er i tvivl, om et ord er korrekt dansk,
+vælg et andet, mere almindeligt dansk ord."""
 
 AFKLARING_TOOL = {
     "name": "afklaring_fuldfoert",
@@ -128,6 +142,33 @@ GRAENSE_HOEJ_INDSATS = 1000
 HOEJ_INDSATS_BESKED = (
     "Dit anmodede indsatsbeløb er sat ret højt! Spil med omtanke. "
     "Og spil aldrig for mere, end du har råd til at tabe!"
+)
+
+# TILFOEJET 2026-09-18 (punkt 1 i den samlede promptrevision, se
+# projekt-ramme-betting-agent.md's "Den ene, samlede promptrevision"):
+# 4 ud af 5 usability-testpersoner saa ALDRIG en ansvarligt-spil-besked,
+# fordi den hidtil KUN blev vist ved indsats > GRAENSE_HOEJ_INDSATS. Denne
+# BASISTEKST vises nu UBETINGET (Streamlit-header-banner + hvert bet
+# assessment-kort) - HOEJ_INDSATS_BESKED ovenfor er BEVIDST bevaret
+# UAEndret og fortsat kun vist ved hoej indsats: den er kontekstuelt
+# specifik ("dit beloeb er sat REt hoejt") og ville vaere faktuelt forkert
+# at vise ved en lav indsats. De to beskeder er derfor et LAG, ikke en
+# erstatning af hinanden - begge stadig 100% kodestyrede, 0 LLM-beslutning.
+ANSVARLIGT_SPIL_BASISTEKST = (
+    "Spil med omtanke. Spil aldrig for mere, end du har råd til at tabe."
+)
+
+# TILFOEJET 2026-09-18 (bruger-feedback efter foerste live-test): den
+# generiske basistekst alene manglede konkrete, danske hjaelperessourcer
+# paa selve kortet (kun tilstede som ren opfordring, ingen henvisning).
+# Begge domaener er verificeret som RIGTIGE, gaeldende danske ressourcer
+# under Spillemyndigheden (ikke opdigtede): StopSpillet.dk (raadgivning om
+# spilafhaengighed) og ROFUS.nu (Spillemyndighedens register for frivilligt
+# selvudelukkede spillere). Vises KUN paa selve kortet (ikke i det
+# koertere header-banner, som brugeren bekraeftede allerede var fint).
+ANSVARLIGT_SPIL_KORT_TILLAEG = (
+    "Spillemyndighedens Hjælpelinje: StopSpillet.dk | "
+    "Selvudelukkelse: ROFUS.nu | Spil Ansvarligt | 18+"
 )
 
 

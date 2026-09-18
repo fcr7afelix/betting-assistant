@@ -44,6 +44,8 @@ from agents.orchestrator import (
     valider_indsats,
     GRAENSE_HOEJ_INDSATS,
     HOEJ_INDSATS_BESKED,
+    ANSVARLIGT_SPIL_BASISTEKST,
+    ANSVARLIGT_SPIL_KORT_TILLAEG,
     save_transcript,
 )
 from agents.dataagent import (
@@ -66,6 +68,9 @@ load_dotenv()
 
 st.set_page_config(page_title="Betting Assistant", page_icon="🎲")
 st.title("Betting Assistant")
+# PERMANENT BANNER (tilfoejet 2026-09-18, punkt 1 i promptrevisionen) -
+# ubetinget, kodestyret, vises FOER al dialog/kort, uafhaengigt af indsats.
+st.caption(f"🔞 {ANSVARLIGT_SPIL_BASISTEKST}")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -81,6 +86,22 @@ if "risikobillede" not in st.session_state:
     st.session_state.risikobillede = None
 if "forslag_besked" not in st.session_state:
     st.session_state.forslag_besked = None
+if "opfoelgning_historik" not in st.session_state:
+    # TILFOEJET 2026-09-18 (punkt 3 i promptrevisionen): Q&A-par stillet
+    # EFTER et kort er vist. Nulstilles ved _nulstil_session() og ved
+    # kamp-navigation (nyt kort = ny kontekst at spoerge ind til).
+    st.session_state.opfoelgning_historik = []
+if "opfoelgning_fejl" not in st.session_state:
+    st.session_state.opfoelgning_fejl = None
+if "kort_historik" not in st.session_state:
+    # TILFOEJET 2026-09-18 (punkt 2 i promptrevisionen, se
+    # projekt-ramme-betting-agent.md): liste af tidligere viste bet
+    # assessment-kort inden for SAMME afklaring, saa brugeren kan navigere
+    # tilbage til et tidligere kort UDEN at genberegne det (0 ekstra
+    # API-/credit-forbrug - kortet er allerede cachet). Hvert element er et
+    # dict {"index", "kamp_navn", "risikobillede"}. Nulstilles KUN ved
+    # _nulstil_session() (ny afklaring), IKKE ved navigation mellem kampe.
+    st.session_state.kort_historik = []
 
 
 MAX_FEJL_FORSOEG = 3  # kredsløbsafbryder: stop automatisk gentagelse hvis
@@ -404,6 +425,19 @@ def _byg_forslag_for_kamp(kamp, liga, marked):
         risikobillede["value_signal"] = _byg_value_signal(liga, kamp, risikobillede)
     st.session_state.risikobillede = risikobillede
 
+    # TILFOEJET 2026-09-18 (punkt 2): cache dette kort i historikken, keyet
+    # paa kamp_index, saa "tidligere forslag"-listen nedenfor kan vise det
+    # igen uden genberegning. Overskriver evt. eksisterende indgang for
+    # samme index (kan i teorien genbesoeges via historik-knappen) i stedet
+    # for at duplikere.
+    index = st.session_state.get("kamp_index", 0)
+    kamp_navn = f"{kamp['hjemmehold']} vs {kamp['udehold']}"
+    historik = [h for h in st.session_state.kort_historik if h["index"] != index]
+    historik.append({"index": index, "kamp_navn": kamp_navn, "risikobillede": risikobillede})
+    historik.sort(key=lambda h: h["index"])
+    st.session_state.kort_historik = historik
+    st.session_state.opfoelgning_historik = []
+
 
 def _byg_forslag(afklaring):
     """Kører den deterministiske sekventering (Data -> Analyse -> Transparens
@@ -584,7 +618,9 @@ def _vis_bet_assessment(risikobillede):
         'Bookmaker-margin = bookmakerens indbyggede fortjeneste — jo '
         'lavere, jo tættere er odds på den &quot;reelle&quot; '
         'sandsynlighed.</p>'
-        '<p class="vk-disclaimer">%s</p>'
+        '<p class="vk-disclaimer" style="font-size:16px;">%s</p>'
+        '<p class="vk-disclaimer" style="margin-top:4px;font-size:10px;">🔞 %s</p>'
+        '<p class="vk-disclaimer" style="margin-top:4px;font-size:10px;">%s</p>'
         '</div></div>'
     ) % (
         html.escape(afklaring["liga"]),
@@ -598,6 +634,8 @@ def _vis_bet_assessment(risikobillede):
         _byg_kontekst_html(kontekst),
         piller_html,
         html.escape(risikobillede["disclaimer"]),
+        html.escape(ANSVARLIGT_SPIL_BASISTEKST),
+        html.escape(ANSVARLIGT_SPIL_KORT_TILLAEG),
     )
     st.markdown(kort_html, unsafe_allow_html=True)
 
@@ -660,8 +698,8 @@ def _formater_turnering_advarsel(liga, turnering_hjemme, turnering_ude):
     if not afvigende:
         return None
     return ("OBS: " + "; ".join(afvigende)
-            + f" (ikke bekraeftet {liga}) - typisk fordi holdet er op-/nedrykket, "
-              "eller fordi holdet ikke daekkes af datakilden.")
+            + f" (ikke bekræftet {liga}) - typisk fordi holdet er op-/nedrykket, "
+              "eller fordi holdet ikke dækkes af datakilden.")
 
 
 def _byg_value_signal_html(value_signal):
@@ -791,6 +829,109 @@ def _byg_value_signal_html(value_signal):
             % html.escape(turnering_advarsel)
         )
     return boks
+# TILFOEJET 2026-09-18 (punkt 3 i den samlede promptrevision). VIGTIGT
+# ARKITEKTUR-NOTE, se projekt-ramme-betting-agent.md's "Den ene, samlede
+# promptrevision - DESIGN LAAST 2026-09-18": det oprindelige designforslag
+# talte om at udvide SELVE Orchestratorens SYSTEM_PROMPT/AFKLARING_TOOL til
+# ogsaa at haandtere opfoelgning. Ved implementeringen viste det sig ikke
+# at passe til den faktiske arkitektur: AFKLARING_TOOL's schema kraever
+# liga/marked/indsats og har intet at goere med et allerede-vist korts
+# indhold. I stedet er dette en HELT SEPARAT, lille prompt+tool, scopet
+# UDELUKKENDE til at klassificere og svare paa spoergsmaal om det viste
+# kort. Det er STADIG en promptdrevet (LLM) routing-beslutning i en
+# ellers deterministisk arkitektur - praecis den indroemmelse, designet
+# bad om, blot implementeret som sin egen funktion i stedet for en
+# udvidelse af SYSTEM_PROMPT. Se "Om produkt"-sektionens planlagte,
+# betingede omformulering (anvendes foerst nu, hvor denne funktion reelt
+# findes).
+OPFOELGNING_SYSTEM_PROMPT = """Du svarer UDELUKKENDE paa opklarende
+spoergsmaal om ÉT allerede vist bet assessment-kort. Du maa IKKE vurdere
+kampe, beregne nyt, eller anbefale et udfald - kortets fakta er alt, du
+har at arbejde med:
+
+{kontekst}
+
+Hvis brugerens besked er et opklarende spoergsmaal TIL DETTE KORT (fx om
+et tal, et fund, eller hvorfor noget staar som det goer), svar kort og
+praecist UDELUKKENDE ud fra fakta ovenfor - opfind INTET nyt.
+
+Hvis brugerens besked IKKE er et spoergsmaal om dette kort, men i stedet
+en ny forespoergsel (en anden liga, et andet marked, et nyt beloeb, eller
+en generel anmodning om "et nyt forslag"), skal du IKKE svare med tekst -
+kald i stedet funktionen "ny_forespoergsel" uden argumenter.
+
+Skriv paa naturligt, korrekt dansk - undgaa norsk-/svensk-farvede ord
+(samme princip som i hoveddialogen)."""
+
+NY_FORESPOERGSEL_TOOL = {
+    "name": "ny_forespoergsel",
+    "description": "Kaldes naar brugerens besked IKKE er et spoergsmaal om det viste kort, men en ny forespoergsel.",
+    "input_schema": {"type": "object", "properties": {}},
+}
+
+
+def _byg_kort_kontekst_tekst(risikobillede, afklaring):
+    """Bygger en kompakt, ren-tekst gengivelse af det viste korts fakta,
+    til brug som kontekst i OPFOELGNING_SYSTEM_PROMPT. Genbruger de samme
+    felter som _vis_bet_assessment() - ingen ny beregning, ingen data der
+    ikke allerede er vist for brugeren."""
+    kontekst = risikobillede["kontekst"]
+    linjer = [
+        f"Liga: {afklaring['liga']}, Marked: {afklaring['marked']}, Indsats: {afklaring['indsats']} kr.",
+        f"Kamp: {risikobillede['hjemmehold']} vs {risikobillede['udehold']}",
+    ]
+    for u in risikobillede["udfald"]:
+        linjer.append(f"Udfald: {u['navn']} @ {u['odds']} (implicit sandsynlighed {u['implicit_sandsynlighed']})")
+    linjer.append(f"Bookmaker-margin: {risikobillede['bookmaker_margin']}")
+    fund = kontekst.get("fund", [])
+    if fund:
+        linjer.append("Fund: " + " | ".join(fund))
+    else:
+        linjer.append("Fund: ingen relevante nyheder fundet")
+    if kontekst.get("usikkerhedspunkt"):
+        linjer.append(f"Usikkerhedspunkt: {kontekst['usikkerhedspunkt']}")
+    linjer.append(f"Disclaimer: {risikobillede['disclaimer']}")
+    value_signal = risikobillede.get("value_signal")
+    if value_signal:
+        linjer.append(f"Value signal-status: {value_signal.get('status')}")
+    return "\n".join(linjer)
+
+
+def _haandter_opfoelgning(brugertekst):
+    """Klassificerer + besvarer ÉT opfoelgende spoergsmaal (eller starter en
+    ny forespoergsel, hvis beskeden reelt er det) - se modul-noten ovenfor
+    for arkitekturbegrundelsen. Samme fejlhaandteringsprincip som
+    _kald_model_og_haandter(): et API-udfald vises som en almindelig
+    fejlbesked, ikke et raat traceback."""
+    kontekst_tekst = _byg_kort_kontekst_tekst(st.session_state.risikobillede, st.session_state.afklaring)
+    try:
+        response = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=400,
+            system=OPFOELGNING_SYSTEM_PROMPT.format(kontekst=kontekst_tekst),
+            tools=[NY_FORESPOERGSEL_TOOL],
+            messages=[{"role": "user", "content": brugertekst}],
+        )
+    except Exception as e:
+        st.session_state.opfoelgning_fejl = str(e)
+        return
+
+    tool_use = next((b for b in response.content if b.type == "tool_use"), None)
+    if tool_use and tool_use.name == "ny_forespoergsel":
+        # Reel ny forespoergsel, ikke en opfoelgning - nulstil hele
+        # afklaringstilstanden og start Orchestrator-dialogen forfra med
+        # brugerens besked som foerste tur.
+        _nulstil_session()
+        st.session_state.messages.append({"role": "user", "content": brugertekst})
+        with st.spinner("Venter paa svar..."):
+            _kald_model_og_haandter()
+        return
+
+    text_blocks = [b.text for b in response.content if b.type == "text"]
+    svar = " ".join(text_blocks) if text_blocks else "Beklager, jeg kunne ikke finde et svar i kortets fakta."
+    st.session_state.opfoelgning_historik.append({"spoergsmaal": brugertekst, "svar": svar})
+
+
 def _nulstil_session():
     """Nulstiller HELE samtale- og forslagstilstanden, så brugeren kan
     starte en ny dialog forfra - tilføjet 2026-09-08 efter brugerens fund:
@@ -808,6 +949,9 @@ def _nulstil_session():
     st.session_state.kamp_index = 0
     st.session_state.antal_kampe_i_vindue = None
     st.session_state.antal_kampe_med_odds = None
+    st.session_state.kort_historik = []
+    st.session_state.opfoelgning_historik = []
+    st.session_state.opfoelgning_fejl = None
 
 
 # Vis hele samtalehistorikken (kun tekst-bidder, ikke rå tool-blokke)
@@ -856,25 +1000,84 @@ if st.session_state.afklaring:
 
     kandidater = st.session_state.get("kamp_kandidater")
     if st.session_state.risikobillede is not None and kandidater:
-        naeste_index = st.session_state.get("kamp_index", 0) + 1
-        if naeste_index < len(kandidater):
-            # Bevidst NEUTRAL formulering - "laveste margin", IKKE "anbefalet"
-            # eller "bedste" - se app.py's modul-docstring om hvorfor ordet
-            # "anbefaling" er undgaaet alle steder i denne fil.
-            naeste_label = f"Vis kamp nr. {naeste_index + 1} (næstlaveste bookmaker-margin)"
-            if st.button(naeste_label):
-                st.session_state.kamp_index = naeste_index
-                st.session_state.risikobillede = None
-                st.session_state.forslag_besked = None
-                with st.spinner("Finder næste kamp..."):
-                    _byg_forslag_for_kamp(
-                        kandidater[naeste_index],
-                        st.session_state.afklaring["liga"],
-                        st.session_state.afklaring["marked"],
-                    )
-                st.rerun()
-        else:
-            st.caption("Ingen flere kampe med odds at vise for denne liga/marked.")
+        aktuel_index = st.session_state.get("kamp_index", 0)
+        naeste_index = aktuel_index + 1
+
+        # TILFOEJET 2026-09-18 (punkt 2): "forrige kamp" ved siden af den
+        # eksisterende "næste kamp" - genbruger CACHET historik, intet nyt
+        # API-/credit-forbrug. Kun aktiv naar der reelt er noget at gaa
+        # tilbage til.
+        forrige_kol, naeste_kol = st.columns(2)
+        with forrige_kol:
+            if aktuel_index > 0 and st.button("◀ Forrige kamp"):
+                forrige = next(
+                    (h for h in st.session_state.kort_historik if h["index"] == aktuel_index - 1),
+                    None,
+                )
+                if forrige:
+                    st.session_state.kamp_index = aktuel_index - 1
+                    st.session_state.risikobillede = forrige["risikobillede"]
+                    st.session_state.forslag_besked = None
+                    st.session_state.opfoelgning_historik = []
+                    st.rerun()
+        with naeste_kol:
+            if naeste_index < len(kandidater):
+                # Bevidst NEUTRAL formulering - "laveste margin", IKKE
+                # "anbefalet" eller "bedste" - se app.py's modul-docstring
+                # om hvorfor ordet "anbefaling" er undgaaet alle steder i
+                # denne fil.
+                naeste_label = f"Næste kamp ▶ (nr. {naeste_index + 1}, næstlaveste bookmaker-margin)"
+                if st.button(naeste_label):
+                    st.session_state.kamp_index = naeste_index
+                    st.session_state.risikobillede = None
+                    st.session_state.forslag_besked = None
+                    with st.spinner("Finder næste kamp..."):
+                        _byg_forslag_for_kamp(
+                            kandidater[naeste_index],
+                            st.session_state.afklaring["liga"],
+                            st.session_state.afklaring["marked"],
+                        )
+                    st.rerun()
+            else:
+                st.caption("Ingen flere kampe med odds.")
+
+        # Tidligere forslag-liste - dækker tilfældet hvor brugeren vil
+        # springe direkte til et kort, der IKKE er nabo til det aktuelle
+        # (fx tilbage til kamp 1 efter at have set kamp 4) - "◀ Forrige
+        # kamp" alene dækker kun ét skridt ad gangen.
+        andre = [h for h in st.session_state.kort_historik if h["index"] != aktuel_index]
+        if andre:
+            with st.expander(f"Tidligere forslag ({len(andre)})"):
+                for h in andre:
+                    if st.button(f"Vis: {h['kamp_navn']}", key=f"hist_{h['index']}"):
+                        st.session_state.kamp_index = h["index"]
+                        st.session_state.risikobillede = h["risikobillede"]
+                        st.session_state.forslag_besked = None
+                        st.session_state.opfoelgning_historik = []
+                        st.rerun()
+
+    # TILFOEJET 2026-09-18 (punkt 3): opfoelgende spoergsmaal EFTER et kort
+    # er vist, i stedet for at samtalen effektivt lukker (den oprindelige
+    # UX-svaghed) - se _haandter_opfoelgning()'s docstring for hvordan
+    # spoergsmaal-vs-ny-forespoergsel afgoeres.
+    if st.session_state.risikobillede is not None:
+        for qa in st.session_state.opfoelgning_historik:
+            with st.chat_message("user"):
+                st.markdown(qa["spoergsmaal"])
+            with st.chat_message("assistant"):
+                st.markdown(tilfoej_ikoner(qa["svar"]))
+
+        if st.session_state.opfoelgning_fejl:
+            st.error(f"Der opstod en fejl: {st.session_state.opfoelgning_fejl}")
+            st.session_state.opfoelgning_fejl = None
+
+        opfoelgning_input = st.chat_input(
+            "Stil et opfølgende spørgsmål til kortet, eller bed om noget nyt..."
+        )
+        if opfoelgning_input:
+            with st.spinner("Venter på svar..."):
+                _haandter_opfoelgning(opfoelgning_input)
+            st.rerun()
 
     if st.session_state.risikobillede is not None or st.session_state.forslag_besked is not None:
         if st.button(RESET_KNAP_LABEL):
