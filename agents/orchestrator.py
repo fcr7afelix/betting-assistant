@@ -20,9 +20,10 @@ client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)
 
-SYSTEM_PROMPT = """Du er en dialogassistent for en betting-rådgivningsplatform, der
-udelukkende giver forslag til fodboldkampe fra Big 5-ligaerne (Premier League,
-Serie A, La Liga, Bundesliga, Ligue 1).
+SYSTEM_PROMPT = """Du er en dialogassistent for en betting-rådgivningsplatform. Dette
+er en midlertidig backup-version, der udelukkende giver forslag til
+landskampe fra UEFA Nations League, aktiveret fordi Big 5-ligaerne holder
+landskampspause i denne periode.
 
 Din opgave er UDELUKKENDE at afklare tre ting med brugeren gennem naturlig samtale:
 1. Liga
@@ -66,7 +67,7 @@ AFKLARING_TOOL = {
         "properties": {
             "liga": {
                 "type": "string",
-                "enum": ["Premier League", "Serie A", "La Liga", "Bundesliga", "Ligue 1"],
+                "enum": ["UEFA Nations League"],
             },
             "marked": {"type": "string", "enum": ["Asian Handicap", "Over/Under 2.5"]},
             "indsats": {"type": "number", "description": "Indsats i kroner"},
@@ -79,11 +80,7 @@ AFKLARING_TOOL = {
 # samme princip som ansvarligt-spil-disclaimeren. Lukket, enum-begrænset sæt
 # (5 ligaer, 2 markeder) gør 1:1-mapping mulig.
 LIGA_IKONER = {
-    "Premier League": "🇬🇧",
-    "Serie A": "🇮🇹",
-    "La Liga": "🇪🇸",
-    "Bundesliga": "🇩🇪",
-    "Ligue 1": "🇫🇷",
+    "UEFA Nations League": "🏆",
 }
 MARKED_IKONER = {
     "Asian Handicap": "⚖️",

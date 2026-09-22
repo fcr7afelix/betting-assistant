@@ -134,7 +134,16 @@ def hent_kampe(liga, dage_frem=7):
     for et rullende vindue paa `dage_frem` dage. Filtrerer til kun
     SCHEDULED/TIMED - andre statusser (POSTPONED, CANCELLED, SUSPENDED)
     frasorteres eksplicit, jf. LAAST krav i projektloggen. CACHET
-    (KAMPE_TTL_SEKUNDER) for at spare paa football-data.org's 10 kald/min."""
+    (KAMPE_TTL_SEKUNDER) for at spare paa football-data.org's 10 kald/min.
+
+    NATIONS LEAGUE-BACKUP: dispatcher til en separat kilde (The Odds
+    API's gratis /events-endpoint), da football-data.org ikke har adgang
+    til denne turnering. Dispatchet sidder HER, ikke kun i vaelg_kamp()/
+    rangér_kampe_med_odds(), fordi app.py ogsaa kalder hent_kampe()
+    direkte - se RETTELSE i 02b_dataagent_dispatch_RETTET.md."""
+    if liga == "UEFA Nations League":
+        return _hent_kampe_nations_league(dage_frem=dage_frem)
+
     kode = LIGA_TIL_FD_KODE.get(liga)
     if kode is None:
         raise ValueError(f"Ukendt liga: {liga!r} - forventede en af {list(LIGA_TIL_FD_KODE)}")
@@ -441,6 +450,9 @@ def rangér_kampe_med_odds(liga, marked, dage_frem=7):
     IKKE det samme som FALLBACK_BESKED (som er en brugervendt streng) -
     kaldere skal selv haandtere tom-liste-tilfaeldet (typisk ved at falde
     tilbage til vaelg_kamp()'s naermeste-kickoff-logik)."""
+    if liga == "UEFA Nations League":
+        return rangér_kampe_nations_league(marked, dage_frem=dage_frem)
+
     kampe = _hent_matchede_kampe(liga, marked, dage_frem=dage_frem)
     return _rangér_med_margin(kampe)
 
@@ -461,7 +473,14 @@ def vaelg_kamp(liga, marked, dage_frem=7):
     RANGERINGSLOGIKKEN (trin 1) deles nu med rangér_kampe_med_odds() via
     _hent_matchede_kampe()/_rangér_med_margin() (udtrukket 2026-09-09) -
     denne funktions EGEN adfaerd er UAENDRET, kun den interne implementering
-    er omlagt for at undgaa at rangeringskriteriet findes to steder."""
+    er omlagt for at undgaa at rangeringskriteriet findes to steder.
+
+    NATIONS LEAGUE-BACKUP (se modulets note foroven): dispatcher til en
+    separat sti, der springer football-data.org over, da den kilde ikke
+    har adgang til denne turnering."""
+    if liga == "UEFA Nations League":
+        return vaelg_kamp_nations_league(marked, dage_frem=dage_frem)
+
     kampe = _hent_matchede_kampe(liga, marked, dage_frem=dage_frem)
     if not kampe:
         return FALLBACK_BESKED
@@ -635,3 +654,195 @@ def hent_nyheder(hjemmehold, udehold):
         return resultater
 
     return hent_med_cache(cache_noegle, NYHEDER_TTL_SEKUNDER, _rigtigt_kald)
+# ============================================================================
+# NATIONS LEAGUE-BACKUP - tilføjet [udfyld dato], KUN til forsvar fredag,
+# hvis Big 5-ligaerne holder landskampspause i eksamensugen. Se
+# test_nations_league_adgang.py for den fulde empiriske baggrund.
+#
+# KENDT, BEVIDST FRAVALG: football-data.org har INGEN adgang til UEFA
+# Nations League på vores gratis TIER_ONE-niveau (bekræftet 403/ikke-
+# fundet, se DEL 1 i test-scriptet). Derfor henter denne gren kampe OG
+# odds fra SAMME kilde (The Odds API) - ingen kryds-kilde-matching, og
+# dermed intet behov for HOLDNAVN_ALIASSER her.
+#
+# BOGMAGERVALG (LÅST via test_nations_league_adgang.py, DEL 3, 45 kampe
+# i vinduet 2026-09-22 til 2026-10-06):
+#   - Over/Under 2.5: pmu_fr (44/45 kampe dækket, 98%). Fransk statsligt
+#     reguleret operatør (Pari Mutuel Urbain) - akademisk mindst lige så
+#     forsvarligt som "branchens standard-reference"-argumentet brugt for
+#     Big 5.
+#   - Asian Handicap: onexbet (38/45 kampe dækket, 84%). BEVIDST FRAVIGELSE
+#     af omdømme-kriteriet, der oprindeligt diskvalificerede onexbet for
+#     Big 5 (se hovedloggen) - kun to bogmagere havde overhovedet AH-
+#     dækning her (onexbet 38/45, pinnacle 16/45), og pinnacle var for
+#     tyndt til at bære en live-demo. Skal begrundes eksplicit ved
+#     forsvaret, ikke undlades nævnt.
+# ============================================================================
+
+MARKED_TIL_BOGMAGER_NATIONS_LEAGUE = {
+    "Asian Handicap": "onexbet",
+    "Over/Under 2.5": "pmu_fr",
+}
+
+LIGA_TIL_ODDS_SPORT_KEY_NATIONS_LEAGUE = {
+    "UEFA Nations League": "soccer_uefa_nations_league",
+}
+
+
+def hent_kampe_med_odds_fra_odds_api(sport_key, marked):
+    """NATIONS LEAGUE-BACKUP: henter kampe OG odds i ÉT kald fra The Odds
+    API, og springer football-data.org helt over (ingen adgang - se
+    modulets NATIONS LEAGUE-BACKUP-note ovenfor). Erstatter, for denne
+    gren, kombinationen hent_kampe()+hent_odds()+match_kamp_odds(): da
+    kampe og odds kommer fra SAMME kilde, er der intet
+    navnematching-problem at løse (ingen HOLDNAVN_ALIASSER nødvendig).
+
+    Returnerer SAMME kamp-dict-facon som match_kamp_odds() ("hjemmehold",
+    "udehold", "kickoff_utc", "odds"), så al nedstrøms-kode
+    (_beregn_bookmaker_margin, _rangér_med_margin, FALLBACK_BESKED-logikken
+    i vaelg_kamp) virker UÆNDRET og genbruges 1:1."""
+    odds_noegle = MARKED_TIL_ODDS_NOEGLE[marked]
+    bogmager = MARKED_TIL_BOGMAGER_NATIONS_LEAGUE[marked]
+    cache_noegle = f"nl_kampe_odds:{sport_key}:{marked}"
+
+    def _rigtigt_kald():
+        try:
+            respons = requests.get(
+                f"{ODDS_API_BASE}/sports/{sport_key}/odds",
+                params={
+                    "apiKey": ODDS_API_KEY,
+                    "regions": "eu",
+                    "markets": odds_noegle,
+                    "oddsFormat": "decimal",
+                },
+                timeout=10,
+            )
+            respons.raise_for_status()
+            data = respons.json()
+        except requests.exceptions.RequestException as e:
+            raise DataagentFejl(
+                f"Kunne ikke hente kampe/odds for Nations League ({marked}) "
+                f"fra The Odds API: {e}"
+            ) from e
+
+        linje = MARKED_TIL_LINJE.get(marked)
+        kampe = []
+        for begivenhed in data:
+            odds_for_denne_kamp = None
+            for bm in begivenhed.get("bookmakers", []):
+                if bm.get("key") != bogmager:
+                    continue
+                for m in bm.get("markets", []):
+                    if m.get("key") != odds_noegle:
+                        continue
+                    outcomes = m.get("outcomes", [])
+                    if linje is not None:
+                        outcomes = [
+                            o for o in outcomes
+                            if o.get("point") is not None
+                            and abs(o["point"] - linje) < 1e-9
+                        ]
+                    if outcomes:
+                        odds_for_denne_kamp = outcomes
+            kampe.append({
+                "hjemmehold": begivenhed["home_team"],
+                "udehold": begivenhed["away_team"],
+                "kickoff_utc": begivenhed["commence_time"],
+                # None hvis den laaste bogmager ikke daekker denne kamp -
+                # haandteres allerede af _beregn_bookmaker_margin()/
+                # vaelg_kamp()'s eksisterende fallback-logik, INGEN ny
+                # fejlhaandtering noedvendig her.
+                "odds": odds_for_denne_kamp,
+            })
+        return kampe
+
+    return hent_med_cache(cache_noegle, KAMPE_TTL_SEKUNDER, _rigtigt_kald)
+
+
+def _hent_matchede_kampe_nations_league(marked, dage_frem=7):
+    """NATIONS LEAGUE-BACKUP: samme rolle som _hent_matchede_kampe(), men
+    for denne gren - bruger hent_kampe_med_odds_fra_odds_api() i stedet
+    for hent_kampe()+hent_odds()+match_kamp_odds(). dage_frem=7 for at
+    matche originalens standard - RETTET 2. gennemgang: et tidligere
+    forsøg brugte 14 som standard her, men da alle reelle kaldesteder
+    (app.py, vaelg_kamp()'s dispatch) altid sender deres EGEN dage_frem
+    (som selv har standard 7), blev 14-tallet aldrig reelt brugt - det
+    var dødt, misvisende kode. Bekræftet empirisk: alle kampe i
+    eksamensvinduet (24/9-29/9) ligger inden for 7 dage fra i dag."""
+    sport_key = LIGA_TIL_ODDS_SPORT_KEY_NATIONS_LEAGUE["UEFA Nations League"]
+    kampe = hent_kampe_med_odds_fra_odds_api(sport_key, marked)
+    for kamp in kampe:
+        kamp["bookmaker_margin"] = (
+            _beregn_bookmaker_margin(kamp["odds"]) if kamp["odds"] else None
+        )
+    return kampe
+
+
+def vaelg_kamp_nations_league(marked, dage_frem=7):
+    """NATIONS LEAGUE-BACKUP-modstykke til vaelg_kamp(). Samme
+    udvælgelseskriterium (laveste bookmaker-margin, tie-break naermeste
+    kickoff), samme to fallback-trin, genbruger _rangér_med_margin()
+    UÆNDRET."""
+    kampe = _hent_matchede_kampe_nations_league(marked, dage_frem=dage_frem)
+    if not kampe:
+        return FALLBACK_BESKED
+
+    kandidater = _rangér_med_margin(kampe)
+    if kandidater:
+        return kandidater[0]
+
+    return min(kampe, key=lambda k: k["kickoff_utc"])
+
+
+def rangér_kampe_nations_league(marked, dage_frem=7):
+    """NATIONS LEAGUE-BACKUP-modstykke til rangér_kampe_med_odds(), til
+    'næste kamp'-knappen i app.py."""
+    kampe = _hent_matchede_kampe_nations_league(marked, dage_frem=dage_frem)
+    return _rangér_med_margin(kampe)
+
+
+def _hent_kampe_nations_league(dage_frem=7):
+    """NATIONS LEAGUE-BACKUP: henter KUN kampe (ingen odds) via The Odds
+    API's GRATIS /events-endpoint (taeller IKKE mod de 500 credits/md -
+    jf. projektloggens "/sports og /events er gratis"). Bruges af
+    hent_kampe()'s dispatch nedenfor - RETTET 2. gennemgang: oprindeligt
+    fangede patchen kun kald via vaelg_kamp()/rangér_kampe_med_odds(),
+    men app.py kalder OGSAA hent_kampe() direkte to steder (til at taelle
+    'antal_kampe_i_vindue') - dispatch derfor flyttet ind i selve
+    hent_kampe(), saa ALLE kaldesteder rammes ensartet, ikke kun de
+    kaldesteder jeg havde set."""
+    sport_key = LIGA_TIL_ODDS_SPORT_KEY_NATIONS_LEAGUE["UEFA Nations League"]
+    cache_noegle = f"nl_kampe:{sport_key}:{dage_frem}"
+
+    def _rigtigt_kald():
+        try:
+            respons = requests.get(
+                f"{ODDS_API_BASE}/sports/{sport_key}/events",
+                params={"apiKey": ODDS_API_KEY},
+                timeout=10,
+            )
+            respons.raise_for_status()
+            data = respons.json()
+        except requests.exceptions.RequestException as e:
+            raise DataagentFejl(
+                f"Kunne ikke hente kampe for Nations League fra The Odds API: {e}"
+            ) from e
+
+        i_dag = datetime.now(timezone.utc)
+        graense = i_dag + timedelta(days=dage_frem)
+        kampe = []
+        for begivenhed in data:
+            raa_kickoff = begivenhed.get("commence_time")
+            if not raa_kickoff:
+                continue
+            kickoff_dt = datetime.fromisoformat(raa_kickoff.replace("Z", "+00:00"))
+            if kickoff_dt > graense:
+                continue
+            kampe.append({
+                "hjemmehold": begivenhed["home_team"],
+                "udehold": begivenhed["away_team"],
+                "kickoff_utc": raa_kickoff,
+            })
+        return kampe
+
+    return hent_med_cache(cache_noegle, KAMPE_TTL_SEKUNDER, _rigtigt_kald)
